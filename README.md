@@ -310,5 +310,4 @@ kubectl describe pod <pod-name>
 ## Documentação
 
 - [deploy/README.md](./deploy/README.md) - Guia de implantação, modos e variáveis de ambiente
-- [BUGFIX_SPREAD_CALCULATION.md](./BUGFIX_SPREAD_CALCULATION.md) - Correção crítica no cálculo de spread
 - [examples/pod-example.yaml](./examples/pod-example.yaml) - Exemplos de uso
