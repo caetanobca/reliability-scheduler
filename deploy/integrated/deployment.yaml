@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reliability-scheduler
+  namespace: kube-scheduler-reliability
+  labels:
+    app: reliability-scheduler
+spec:
+  replicas: 1  # Single replica for now; increase for HA
+  selector:
+    matchLabels:
+      app: reliability-scheduler
+  template:
+    metadata:
+      labels:
+        app: reliability-scheduler
+    spec:
+      serviceAccountName: reliability-scheduler
+
+      # Priority class for scheduler (optional but recommended)
+      priorityClassName: system-cluster-critical
+
+      containers:
+      - name: scheduler
+        image: caetanobca/reliability_schedule:v0.9-linear
+        imagePullPolicy: Always
+
+        command:
+        - /kube-scheduler
+        - --config=/etc/kubernetes/scheduler-config.yaml
+        - --v=2
+
+        # Load all environment variables from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: reliability-scheduler-env
+
+        volumeMounts:
+        - name: config
+          mountPath: /etc/kubernetes
+          readOnly: true
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+            scheme: HTTPS
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 15
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 15
+          failureThreshold: 3
+
+      volumes:
+      - name: config
+        configMap:
+          name: reliability-scheduler-config

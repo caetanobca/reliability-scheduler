@@ -1,0 +1,111 @@
+---
+# Namespace for the scheduler
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-scheduler-reliability
+
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: reliability-scheduler
+  namespace: kube-scheduler-reliability
+
+---
+# ClusterRole - permissions needed by the scheduler
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: reliability-scheduler
+rules:
+  # Permissions to read pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to bind pods to nodes
+  - apiGroups: [""]
+    resources: ["pods/binding"]
+    verbs: ["create"]
+
+  # Permissions to update pod status
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["patch", "update"]
+
+  # Permissions to read nodes
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to read namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to read configmaps (for authentication)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions for PVs and PVCs
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to read services, replicationcontrollers
+  - apiGroups: [""]
+    resources: ["services", "replicationcontrollers"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to read replicasets, statefulsets
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to read deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions for storage classes
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes", "csidrivers", "csistoragecapacities"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions for pod disruption budgets
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+
+  # Permissions to create events (core API)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+
+  # Permissions to create events (events.k8s.io API)
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+
+  # Permissions for leases (leader election)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: reliability-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: reliability-scheduler
+    namespace: kube-scheduler-reliability
+roleRef:
+  kind: ClusterRole
+  name: reliability-scheduler
+  apiGroup: rbac.authorization.k8s.io
