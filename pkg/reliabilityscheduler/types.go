@@ -12,7 +12,7 @@ type ReliabilitySchedulerArgs struct {
 	metav1.TypeMeta
 
 	// Linear regression coefficients for target spread calculation
-	// TargetSpread = Intercept + MinAvailabilityWeight*MinAvailability + HourPerFailureWeight*HourPerFailure + TotalNodesWeight*TotalNodes
+	// TargetSpread = (MinAvailability - HourPerFailureWeight*HourPerFailure - TotalNodesWeight*TotalNodes - Intercept) / SpreadWeight
 	Intercept            float64 `json:"intercept,omitempty"`
 	SpreadWeight         float64 `json:"spreadWeight,omitempty"`
 	HourPerFailureWeight float64 `json:"hourPerFailureWeight,omitempty"`
