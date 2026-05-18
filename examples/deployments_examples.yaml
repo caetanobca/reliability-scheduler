@@ -1,0 +1,97 @@
+# Example pods for the Reliability Scheduler
+
+---
+# Example 1: High availability application
+apiVersion: v1
+kind: Pod
+metadata:
+  name: critical-app-1
+  labels:
+    # REQUIRED: Application identifier - all pods of the same app must have the same value
+    app: critical-service
+  annotations:
+    # REQUIRED: Minimum availability requirement (0.0 - 1.0)
+    reliability.scheduler/min-availability: "0.99"
+spec:
+  # Use the reliability scheduler
+  schedulerName: reliability-scheduler
+
+  containers:
+  - name: app
+    image: nginx:latest
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+
+---
+# Example 2: Deployment using the reliability scheduler
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-application
+  labels:
+    app: my-application
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: my-application
+  template:
+    metadata:
+      labels:
+        # REQUIRED: Application identifier
+        app: my-application
+      annotations:
+        # REQUIRED: Minimum availability
+        reliability.scheduler/min-availability: "0.95"
+    spec:
+      # Use the reliability scheduler
+      schedulerName: reliability-scheduler
+
+      containers:
+      - name: app
+        image: nginx:latest
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+# Example 3: StatefulSet using the reliability scheduler
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: database-cluster
+spec:
+  serviceName: database
+  replicas: 3
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+      annotations:
+        # Very high availability requirement for database
+        reliability.scheduler/min-availability: "0.995"
+    spec:
+      schedulerName: reliability-scheduler
+
+      containers:
+      - name: database
+        image: postgres:15
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
