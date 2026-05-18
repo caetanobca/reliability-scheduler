@@ -1,0 +1,37 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: reliability-scheduler-rules
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+  - name: reliability_scheduler
+    interval: 15s
+    rules:
+    # Hour per failure (última 1h)
+    # Calcula o tempo médio (em horas) entre períodos de indisponibilidade
+    # Fórmula: 1 hora / número de transições onde (Running < Total)
+    #
+    # Exemplo:
+    # - App estável (sem falhas): retorna 1.0 (1h sem problemas)
+    # - App com 2 crashes na última hora: retorna 0.5 (crash a cada 30min)
+    # - App com 10 crashes na última hora: retorna 0.1 (crash a cada 6min)
+    #
+    # NOTA: Apps recém criadas podem ter valor baixo (~1.0) na primeira hora
+    # devido ao período de inicialização ser contado como "indisponibilidade"
+    - record: app:reliability:hour_per_failure:1h
+      expr: |
+        1 / (
+          changes(
+            (
+              sum by (app) (kube_pod_status_phase{phase="Running"})
+              <
+              sum by (app) (kube_pod_status_phase{phase!~"Succeeded|Failed"})
+            )[1h:]
+          )
+          or vector(0.001)
+        )
+        or vector(1)

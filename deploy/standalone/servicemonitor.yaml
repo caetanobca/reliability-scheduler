@@ -1,0 +1,35 @@
+# ServiceMonitor for Prometheus (if using Prometheus Operator)
+apiVersion: v1
+kind: Service
+metadata:
+  name: reliability-scheduler-metrics
+  namespace: kube-scheduler-reliability
+  labels:
+    app: reliability-scheduler
+spec:
+  ports:
+  - name: metrics
+    port: 10259
+    protocol: TCP
+    targetPort: 10259
+  selector:
+    app: reliability-scheduler
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: reliability-scheduler
+  namespace: kube-scheduler-reliability
+  labels:
+    app: reliability-scheduler
+spec:
+  selector:
+    matchLabels:
+      app: reliability-scheduler
+  endpoints:
+  - port: metrics
+    interval: 30s
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
