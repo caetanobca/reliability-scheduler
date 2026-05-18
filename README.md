@@ -204,13 +204,7 @@ spec:
 
 ### Build
 ```bash
-# Baixar dependências
-make deps
-
-# Compilar
-make build
-
-# O binário estará em ./bin/reliability-scheduler
+go build -o bin/reliability-scheduler ./cmd/scheduler
 ```
 
 ### Executar
@@ -281,17 +275,12 @@ echo "scale=4; $NODES_WITH_PODS / $TOTAL_PODS" | bc
 
 ### Testando
 ```bash
-make test
+go test ./...
 ```
 
 ### Formatação
 ```bash
-make fmt
-```
-
-### Verificação
-```bash
-make check
+go fmt ./...
 ```
 
 ## Troubleshooting
