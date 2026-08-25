@@ -17,7 +17,6 @@ const (
 
 	// Annotations for pod configuration
 	AnnotationMinAvailability = "reliability.scheduler/min-availability"
-	AnnotationHourPerFailure  = "reliability.scheduler/hour-per-failure"
 
 	// Label selector for application grouping
 	LabelAppName = "app"
@@ -274,25 +273,6 @@ func getMinimumAvailability(pod *v1.Pod) (float64, error) {
 	}
 
 	return minAvail, nil
-}
-
-// getHourPerFailure extracts the hour per failure metric from pod annotations.
-func getHourPerFailure(pod *v1.Pod) (float64, error) {
-	if pod.Annotations == nil {
-		return 0.0, fmt.Errorf("pod has no annotations")
-	}
-
-	hourPerFailureStr, exists := pod.Annotations[AnnotationHourPerFailure]
-	if !exists {
-		return 0.0, fmt.Errorf("annotation %s not found", AnnotationHourPerFailure)
-	}
-
-	hourPerFailure, err := strconv.ParseFloat(hourPerFailureStr, 64)
-	if err != nil {
-		return 0.0, fmt.Errorf("failed to parse hour per failure: %w", err)
-	}
-
-	return hourPerFailure, nil
 }
 
 // getAppSelector extracts the application label selector from pod labels.
