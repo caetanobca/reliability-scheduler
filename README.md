@@ -1,119 +1,182 @@
-# Reliability Scheduler Plugin
+# Reliability Scheduler
 
-Um plugin personalizado para o Kubernetes Scheduler que implementa escalonamento baseado em disponibilidade e espalhamento de pods.
+A Kubernetes scheduler plugin that schedules pods based on application reliability goals, using a linear regression model to compute the optimal pod spread across cluster nodes.
 
-## Visão Geral
+## Table of Contents
 
-O Reliability Scheduler é um plugin de escalonamento do Kubernetes que permite ao operador da aplicação definir o nível mínimo de disponibilidade aceitável. O plugin calcula automaticamente o espalhamento ideal dos pods entre os nós do cluster para atingir essa disponibilidade desejada.
+- [Description](#description)
+- [Architecture](#architecture)
+- [Dependencies](#dependencies)
+- [Build](#build)
+- [Deploy](#deploy)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Examples](#examples)
+- [Troubleshooting](#troubleshooting)
 
-## Conceitos
+---
 
-### Disponibilidade
-Definida como a fração dos pods que estão em execução:
-```
-Disponibilidade = pods running / total de pods da aplicação
-```
+## Description
 
-### Espalhamento
-Número de nós que possuem pelo menos um pod da aplicação em execução:
-```
-Espalhamento = nós com ≥1 pod / total de pods da aplicação
-```
+The Reliability Scheduler is a custom Kubernetes scheduler plugin that allows application operators to declare a minimum availability target per pod. The plugin automatically computes the required spread of pods across nodes to meet that availability target, using a configurable linear regression model trained on historical reliability data.
 
-### Hora/Falha
-Métrica de confiabilidade histórica:
-```
-Hora/Falha = tempo total observado (horas) / quantidade de falhas
-```
-Onde "falha" é definida como um estado onde um ou mais pods não estão running.
+**Key concepts:**
 
-### Espalhamento Alvo
-Calculado usando regressão linear:
-```
-Espalhamento_Alvo = (Disponibilidade_Min - HourPerFailureWeight×Hora_Falha - TotalNodesWeight×Total_Nós - Intercept) / SpreadWeight
-```
+- **Availability** — fraction of pods currently running: `running_pods / total_pods`
+- **Spread** — fraction of nodes hosting at least one pod: `nodes_with_pod / total_pods`
+- **Hour-per-Failure** — historical reliability metric: `total_observed_hours / number_of_failures` (a failure is any state where one or more pods are not running)
+- **Target Spread** — computed from the linear regression model:
+  ```
+  TargetSpread = (MinAvailability - HourPerFailureWeight*HourPerFailure - TotalNodesWeight*TotalNodes - Intercept) / SpreadWeight
+  ```
 
-## Arquitetura
+The plugin integrates with Prometheus to fetch `hour_per_failure` metrics automatically, with configurable fallback values.
 
-O plugin implementa quatro pontos de extensão do Kubernetes Scheduler Framework:
+---
 
-### 1. PreFilter
-- Obtém a disponibilidade mínima desejada (annotation do pod)
-- Obtém a métrica hora/falha da aplicação
-- Conta o total de nós do cluster
-- **Aplica o modelo de regressão linear** para calcular o espalhamento alvo
-- Calcula o espalhamento atual
-- Armazena o estado no CycleState
+## Architecture
 
-### 2. Filter
-- **Se espalhamento_atual ≥ espalhamento_alvo**: permite escalonamento em qualquer nó
-- **Se espalhamento_atual < espalhamento_alvo**: apenas permite escalonamento em nós que NÃO possuem pods dessa aplicação
-
-### 3. Score
-- Atribui pontuações mais altas para nós com **menos pods da aplicação**
-- Promove espalhamento uniforme dos pods
-
-### 4. NormalizeScore
-- Normaliza as pontuações para o intervalo padrão [0, 100]
-
-## Estrutura do Projeto
+The plugin implements four Kubernetes Scheduler Framework extension points, all running inside the same scheduler binary:
 
 ```
-.
-├── cmd/
-│   └── scheduler/
-│       └── main.go                    # Ponto de entrada
-├── pkg/
-│   └── reliabilityscheduler/
-│       ├── plugin.go                  # Registro e carregamento de coeficientes
-│       ├── types.go                   # Estruturas de dados
-│       ├── prefilter.go               # Cálculo de espalhamento alvo/atual
-│       ├── filter.go                  # Lógica de espalhamento
-│       ├── score.go                   # Pontuação por densidade de pods
-│       ├── normalize_score.go         # Normalização de scores
-│       └── metrics_provider.go        # Integração com Prometheus
+PreFilter → Filter → Score → NormalizeScore
+```
+
+### Extension Points
+
+| Extension | What it does |
+|-----------|-------------|
+| **PreFilter** | Reads pod annotations and label, queries Prometheus for `hour_per_failure`, counts cluster nodes and app pods, computes `TargetSpread` and `CurrentSpread`, stores state in `CycleState` |
+| **Filter** | If `CurrentSpread < TargetSpread`: rejects nodes that already have a pod from this app. If target is met: all nodes are eligible |
+| **Score** | Scores each node inversely proportional to its pod density: `score = (1 - podsOnNode / totalPods) × MaxNodeScore` |
+| **NormalizeScore** | Normalizes all node scores to `[MinNodeScore, MaxNodeScore]` using linear normalization |
+
+### Communication
+
+All extension points communicate via `framework.CycleState` — a per-scheduling-cycle store written by PreFilter and read by Filter, Score, and NormalizeScore.
+
+The `MetricsProvider` component abstracts Prometheus access with an in-memory cache (configurable TTL, default 5 min). Fallback strategy: valid cache → Prometheus query → stale cache → default value.
+
+### Project Structure
+
+```
+scheduler_oficial/
+├── cmd/scheduler/main.go              # Entry point
+├── pkg/reliabilityscheduler/
+│   ├── plugin.go                      # Plugin registration, coefficient loading
+│   ├── types.go                       # Data structures (args, cycle state)
+│   ├── prefilter.go                   # Target/current spread calculation
+│   ├── filter.go                      # Spread enforcement logic
+│   ├── score.go                       # Pod density scoring
+│   ├── normalize_score.go             # Score normalization
+│   └── metrics_provider.go            # Prometheus integration with cache
 ├── deploy/
-│   ├── standalone/                    # Manifests modo standalone
-│   ├── integrated/                    # Manifests modo integrado (recomendado)
-│   └── scheduler-env-configmap.example.yaml
+│   ├── standalone/                    # Standalone mode manifests
+│   └── integrated/                    # Integrated mode manifests (recommended)
 ├── examples/
-│   └── pod-example.yaml               # Exemplos de uso
+│   └── deployments_examples.yaml      # Usage examples
 ├── Dockerfile
-├── go.mod
-└── README.md
+├── Makefile
+└── go.mod
 ```
 
-## Configuração
+---
 
-### Variáveis de Ambiente
+## Dependencies
 
-Todas as variáveis de ambiente têm precedência sobre os valores definidos no arquivo de configuração do scheduler.
+- **Go** 1.22+
+- **Kubernetes** 1.29+
+- **Prometheus** (optional) — for automatic `hour_per_failure` metric collection
 
-#### Coeficientes do Modelo
+---
 
-| Variável | Padrão | Descrição |
-|---|---|---|
-| `RELIABILITY_SCHEDULER_INTERCEPT` | `0` | Intercepto da regressão linear |
-| `RELIABILITY_SCHEDULER_SPREAD_WEIGHT` | `1` | Peso da disponibilidade mínima |
-| `RELIABILITY_SCHEDULER_HOUR_PER_FAILURE_WEIGHT` | `0` | Peso da métrica hora/falha |
-| `RELIABILITY_SCHEDULER_TOTAL_NODES_WEIGHT` | `0` | Peso do total de nós do cluster |
-| `RELIABILITY_SCHEDULER_SPREAD_SMALL_APPS` | `0` | Ajuste de `SPREAD_WEIGHT` para apps com ≤10 pods (somado ao base) |
-| `RELIABILITY_SCHEDULER_INTERCEPT_SMALL_APPS` | `0` | Ajuste de `INTERCEPT` para apps com ≤10 pods (somado ao base) |
+## Build
 
-#### Integração com Prometheus
+### Local binary
 
-| Variável | Padrão | Descrição |
-|---|---|---|
-| `PROMETHEUS_URL` | `http://prometheus-k8s.monitoring.svc:9090` | URL do serviço Prometheus |
-| `DEFAULT_HOUR_PER_FAILURE` | `0.0` | Valor usado quando a métrica não está disponível no Prometheus (0.0 = neutro, sem efeito no cálculo) |
-| `METRICS_CACHE_TTL` | `5m` | TTL do cache de métricas (ex: `1m`, `5m`, `10m`) |
-| `METRICS_QUERY_TIMEOUT` | `100ms` | Timeout das queries ao Prometheus (ex: `50ms`, `200ms`) |
+```bash
+go build -o bin/reliability-scheduler ./cmd/scheduler
+```
 
-Essas variáveis são definidas via ConfigMap — veja `deploy/<modo>/scheduler-env-configmap.yaml`.
+### Docker image
 
-### Arquivo de Configuração do Scheduler
+```bash
+docker build -t <your-registry>/reliability-scheduler:<version> .
+docker push <your-registry>/reliability-scheduler:<version>
+```
 
-Os coeficientes também podem ser definidos diretamente no `configmap.yaml`:
+### Using Make
+
+```bash
+# Build and push image
+make docker-build docker-push REGISTRY=<your-registry> VERSION=<version>
+
+# Run tests
+make test
+
+# Format code
+make fmt
+```
+
+---
+
+## Deploy
+
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for full deployment instructions, including:
+
+- Standalone vs. integrated mode comparison
+- Cluster prerequisites
+- Step-by-step installation with the manifests in `deploy/`
+- Prometheus/ServiceMonitor configuration
+- RBAC requirements
+
+---
+
+## Configuration
+
+### Pod Annotations
+
+Pods that should use this scheduler must set `schedulerName` and the required annotation:
+
+| Annotation | Required | Description | Example |
+|-----------|----------|-------------|---------|
+| `reliability.scheduler/min-availability` | Yes | Minimum desired availability (0.0–1.0) | `"0.95"` |
+
+### Required Labels
+
+| Label | Description |
+|-------|-------------|
+| `app` | Application identifier — groups pods belonging to the same application |
+
+### Environment Variables
+
+Environment variables take precedence over values in the scheduler ConfigMap.
+
+#### Linear Regression Coefficients
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RELIABILITY_SCHEDULER_INTERCEPT` | `0` | Intercept of the linear regression |
+| `RELIABILITY_SCHEDULER_SPREAD_WEIGHT` | `1` | Coefficient for spread |
+| `RELIABILITY_SCHEDULER_HOUR_PER_FAILURE_WEIGHT` | `0` | Coefficient for hour-per-failure metric |
+| `RELIABILITY_SCHEDULER_TOTAL_NODES_WEIGHT` | `0` | Coefficient for total node count |
+| `RELIABILITY_SCHEDULER_SPREAD_SMALL_APPS` | `0` | `SpreadWeight` adjustment for apps with ≤10 pods (added to base value) |
+| `RELIABILITY_SCHEDULER_INTERCEPT_SMALL_APPS` | `0` | `Intercept` adjustment for apps with ≤10 pods (added to base value) |
+
+#### Prometheus Integration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROMETHEUS_URL` | `http://prometheus-k8s.monitoring.svc:9090` | Prometheus service URL |
+| `DEFAULT_HOUR_PER_FAILURE` | `0.0` | Fallback value when metric is unavailable (0.0 = neutral, no effect on calculation) |
+| `METRICS_CACHE_TTL` | `5m` | Metrics cache TTL (e.g., `1m`, `5m`, `10m`) |
+| `METRICS_QUERY_TIMEOUT` | `100ms` | Prometheus query timeout (e.g., `50ms`, `200ms`) |
+
+These variables are typically set via a ConfigMap — see `deploy/<mode>/scheduler-env-configmap.yaml`.
+
+### Scheduler ConfigMap
+
+Coefficients can also be set directly in the scheduler `configmap.yaml`:
 
 ```yaml
 pluginConfig:
@@ -125,9 +188,11 @@ pluginConfig:
       totalNodesWeight: 0.05
 ```
 
-## Uso
+---
 
-### Definindo Disponibilidade Mínima no Pod
+## Usage
+
+### Minimal pod spec
 
 ```yaml
 apiVersion: v1
@@ -135,9 +200,8 @@ kind: Pod
 metadata:
   name: my-app
   labels:
-    app: my-application  # Obrigatório: identifica a aplicação
+    app: my-application          # Required: identifies the application group
   annotations:
-    # Disponibilidade mínima desejada (0.0 - 1.0)
     reliability.scheduler/min-availability: "0.95"
 spec:
   schedulerName: reliability-scheduler
@@ -146,168 +210,119 @@ spec:
     image: my-app:latest
 ```
 
-### Annotations
+### Scheduler behavior
 
-| Annotation | Obrigatória | Descrição | Exemplo |
-|---|---|---|---|
-| `reliability.scheduler/min-availability` | Sim | Disponibilidade mínima desejada (0.0 a 1.0) | "0.95" |
-| `reliability.scheduler/hour-per-failure` | Não | Métrica de confiabilidade histórica. Se ausente, usa Prometheus ou `DEFAULT_HOUR_PER_FAILURE` | "100.0" |
+**When `CurrentSpread < TargetSpread`:**
+- Filter: only nodes without pods from this app are eligible
+- Score: nodes without pods receive maximum score
+- Result: forces spread to new nodes
 
-### Labels Obrigatórias
+**When `CurrentSpread >= TargetSpread`:**
+- Filter: all nodes are eligible
+- Score: nodes with fewer pods receive higher scores
+- Result: promotes uniform load balancing
 
-| Label | Descrição | Exemplo |
-|-------|-----------|---------|
-| `app` | Identificador da aplicação (agrupa pods) | "my-application" |
+---
 
-## Exemplos
+## Examples
 
-### Aplicação com Alta Disponibilidade
+See [`examples/deployments_examples.yaml`](./examples/deployments_examples.yaml) for complete deployment examples.
+
+### High availability application
+
 ```yaml
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: critical-app
-  labels:
-    app: critical-service
-  annotations:
-    reliability.scheduler/min-availability: "0.99"
+  name: critical-service
 spec:
-  schedulerName: reliability-scheduler
-  containers:
-  - name: app
-    image: critical-service:latest
+  replicas: 6
+  selector:
+    matchLabels:
+      app: critical-service
+  template:
+    metadata:
+      labels:
+        app: critical-service
+      annotations:
+        reliability.scheduler/min-availability: "0.99"
+    spec:
+      schedulerName: reliability-scheduler
+      containers:
+      - name: app
+        image: critical-service:latest
 ```
 
-### Aplicação com Disponibilidade Padrão
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: standard-app
-  labels:
-    app: standard-service
-  annotations:
-    reliability.scheduler/min-availability: "0.90"
-spec:
-  schedulerName: reliability-scheduler
-  containers:
-  - name: app
-    image: standard-service:latest
-```
+### Migrate an existing deployment to use this scheduler
 
-## Compilação e Instalação
-
-### Pré-requisitos
-- Go 1.22+
-- Acesso a um cluster Kubernetes
-- Kubernetes 1.29+
-
-### Build
 ```bash
-go build -o bin/reliability-scheduler ./cmd/scheduler
+kubectl patch deployment <name> -p '{
+  "spec": {
+    "template": {
+      "metadata": {
+        "labels": {"app": "<app-name>"},
+        "annotations": {"reliability.scheduler/min-availability": "0.95"}
+      },
+      "spec": {"schedulerName": "reliability-scheduler"}
+    }
+  }
+}'
 ```
 
-### Executar
+### Revert to default scheduler
+
 ```bash
-./bin/reliability-scheduler \
-  --config=/path/to/scheduler-config.yaml \
-  --kubeconfig=/path/to/kubeconfig
+kubectl patch deployment <name> -p '{"spec":{"template":{"spec":{"schedulerName":"default-scheduler"}}}}'
 ```
 
-### Executar com Variáveis de Ambiente
-```bash
-export RELIABILITY_SCHEDULER_INTERCEPT=0.5
-export RELIABILITY_SCHEDULER_SPREAD_WEIGHT=0.3
-export RELIABILITY_SCHEDULER_HOUR_PER_FAILURE_WEIGHT=0.1
-export RELIABILITY_SCHEDULER_TOTAL_NODES_WEIGHT=0.05
-
-./bin/reliability-scheduler \
-  --config=/path/to/scheduler-config.yaml \
-  --kubeconfig=/path/to/kubeconfig
-```
-
-## Comportamento do Plugin
-
-### Cenário 1: Espalhamento Insuficiente
-```
-Espalhamento Atual < Espalhamento Alvo
-```
-- **Filter**: Apenas nós SEM pods da aplicação são elegíveis
-- **Score**: Nós sem pods recebem pontuação máxima
-- **Resultado**: Força espalhamento em novos nós
-
-### Cenário 2: Espalhamento Adequado
-```
-Espalhamento Atual ≥ Espalhamento Alvo
-```
-- **Filter**: Todos os nós são elegíveis
-- **Score**: Nós com menos pods recebem pontuações mais altas
-- **Resultado**: Favorece balanceamento uniforme
-
-## Métricas e Monitoramento
-
-### Visualizando o Espalhamento Atual
-```bash
-# Listar pods por nó para uma aplicação
-kubectl get pods -l app=my-application -o wide
-```
-
-### Calculando Espalhamento Manualmente
-```bash
-# Total de pods
-TOTAL_PODS=$(kubectl get pods -l app=my-application --no-headers | wc -l)
-
-# Nós únicos com pods
-NODES_WITH_PODS=$(kubectl get pods -l app=my-application -o wide --no-headers | awk '{print $7}' | sort -u | wc -l)
-
-# Espalhamento
-echo "scale=4; $NODES_WITH_PODS / $TOTAL_PODS" | bc
-```
-
-## Desenvolvimento
-
-### Ajustando o Modelo de Regressão
-
-1. Colete dados do seu cluster (disponibilidade, hora/falha, nós)
-2. Treine um modelo de regressão linear
-3. Extraia os coeficientes: Intercept, SpreadWeight, HourPerFailureWeight, TotalNodesWeight
-4. Configure via variáveis de ambiente ou arquivo de config
-
-### Testando
-```bash
-go test ./...
-```
-
-### Formatação
-```bash
-go fmt ./...
-```
+---
 
 ## Troubleshooting
 
-### Pods não sendo escalonados
-1. Verifique se as annotations obrigatórias estão presentes
-2. Verifique se a label `app` está definida
-3. Verifique os logs do scheduler:
+### Pods not being scheduled
+
+1. Check that the pod has the required annotation `reliability.scheduler/min-availability`
+2. Check that the pod has the `app` label
+3. Check scheduler logs:
+   ```bash
+   kubectl logs -n kube-scheduler-reliability -l app=reliability-scheduler
+   ```
+
+### Spread not being respected
+
+1. Verify the regression coefficients are set correctly (Intercept, SpreadWeight, HourPerFailureWeight, TotalNodesWeight)
+2. Check the pod events:
+   ```bash
+   kubectl describe pod <pod-name>
+   ```
+
+### Prometheus not connecting
+
 ```bash
-kubectl logs -n kube-scheduler-reliability -l app=reliability-scheduler
+kubectl get svc -A | grep prometheus   # find namespace and service name
+# Update PROMETHEUS_URL in scheduler-env-configmap.yaml
 ```
 
-### Espalhamento não está sendo respeitado
-1. Verifique se os coeficientes da regressão estão corretos (Intercept, SpreadWeight, HourPerFailureWeight, TotalNodesWeight)
-2. Verifique o cálculo do espalhamento alvo
-3. Verifique eventos do pod:
+### Inspect current spread for an app
+
 ```bash
-kubectl describe pod <pod-name>
+APP=my-application
+TOTAL=$(kubectl get pods -l app=${APP} --no-headers | wc -l)
+NODES=$(kubectl get pods -l app=${APP} -o wide --no-headers | awk '{print $7}' | sort -u | wc -l)
+echo "Spread: ${NODES}/${TOTAL}"
 ```
 
-## Limitações
+### Adjusting the regression model
 
-- Requer que todos os pods da mesma aplicação tenham a label `app` com o mesmo valor
-- Requer a annotation `reliability.scheduler/min-availability` em cada pod
-- Considera todos os pods (Running, Pending) para cálculo correto do total
+1. Collect cluster data (availability, hour-per-failure, node count)
+2. Train a linear regression model
+3. Extract coefficients: Intercept, SpreadWeight, HourPerFailureWeight, TotalNodesWeight
+4. Set via environment variables or ConfigMap
 
-## Documentação
+---
 
-- [deploy/README.md](./deploy/README.md) - Guia de implantação, modos e variáveis de ambiente
-- [examples/pod-example.yaml](./examples/pod-example.yaml) - Exemplos de uso
+## Limitations
+
+- All pods of the same application must share the same `app` label value
+- The `reliability.scheduler/min-availability` annotation is required on each pod
+- Both Running and Pending pods are counted when computing total pod count
